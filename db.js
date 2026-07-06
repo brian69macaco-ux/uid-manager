@@ -1,45 +1,28 @@
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 
 const dataDir = path.join(__dirname, 'data');
+const dbFile = path.join(dataDir, 'store.json');
+
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const db = new Database(path.join(dataDir, 'uid-manager.db'));
+function now() {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS api_keys (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    key_hash TEXT NOT NULL UNIQUE,
-    key_prefix TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+function load() {
+  if (!fs.existsSync(dbFile)) {
+    return { api_keys: [], uids: [], nextId: 1 };
+  }
+  return JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+}
 
-  CREATE TABLE IF NOT EXISTS uids (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    uid TEXT NOT NULL UNIQUE,
-    client_name TEXT,
-    status TEXT NOT NULL DEFAULT 'inactive',
-    notes TEXT,
-    activated_at TEXT,
-    expires_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_uids_status ON uids(status);
-  CREATE INDEX IF NOT EXISTS idx_uids_uid ON uids(uid);
-`);
-
-const columns = db.prepare('PRAGMA table_info(uids)').all().map((c) => c.name);
-if (!columns.includes('client_name')) {
-  db.exec('ALTER TABLE uids ADD COLUMN client_name TEXT');
+function save(data) {
+  fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
 
 function hashKey(key) {
@@ -56,12 +39,18 @@ function generateApiKey() {
 }
 
 function ensureDefaultApiKey() {
-  const count = db.prepare('SELECT COUNT(*) AS total FROM api_keys').get().total;
-  if (count === 0) {
+  const data = load();
+  if (data.api_keys.length === 0) {
     const { raw, hash, prefix } = generateApiKey();
-    db.prepare(
-      'INSERT INTO api_keys (id, name, key_hash, key_prefix) VALUES (?, ?, ?, ?)'
-    ).run(uuidv4(), 'Chave padrão', hash, prefix);
+    data.api_keys.push({
+      id: uuidv4(),
+      name: 'Chave padrão',
+      key_hash: hash,
+      key_prefix: prefix,
+      active: 1,
+      created_at: now()
+    });
+    save(data);
     console.log('\n========================================');
     console.log('API Key padrão criada (guarde agora!):');
     console.log(raw);
@@ -84,141 +73,159 @@ function isExpiredRow(row) {
 
 function validateApiKey(key) {
   if (!key) return false;
-  const row = db.prepare(
-    'SELECT id FROM api_keys WHERE key_hash = ? AND active = 1'
-  ).get(hashKey(key));
-  return Boolean(row);
+  const data = load();
+  return data.api_keys.some((k) => k.key_hash === hashKey(key) && k.active === 1);
 }
 
 function listApiKeys() {
-  return db.prepare(
-    'SELECT id, name, key_prefix, active, created_at FROM api_keys ORDER BY created_at DESC'
-  ).all();
+  return load().api_keys
+    .map(({ id, name, key_prefix, active, created_at }) => ({ id, name, key_prefix, active, created_at }))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 function createApiKey(name) {
+  const data = load();
   const { raw, hash, prefix } = generateApiKey();
   const id = uuidv4();
-  db.prepare(
-    'INSERT INTO api_keys (id, name, key_hash, key_prefix) VALUES (?, ?, ?, ?)'
-  ).run(id, name, hash, prefix);
+  data.api_keys.push({ id, name, key_hash: hash, key_prefix: prefix, active: 1, created_at: now() });
+  save(data);
   return { id, name, key: raw, prefix };
 }
 
 function toggleApiKey(id, active) {
-  db.prepare('UPDATE api_keys SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
+  const data = load();
+  const key = data.api_keys.find((k) => k.id === id);
+  if (key) key.active = active ? 1 : 0;
+  save(data);
 }
 
 function deleteApiKey(id) {
-  db.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
+  const data = load();
+  data.api_keys = data.api_keys.filter((k) => k.id !== id);
+  save(data);
+}
+
+function filterUids(uids, { search = '', status = '' } = {}) {
+  const ts = now();
+  return uids.filter((row) => {
+    if (search) {
+      const q = search.toLowerCase();
+      const match = row.uid.toLowerCase().includes(q)
+        || (row.client_name || '').toLowerCase().includes(q)
+        || (row.notes || '').toLowerCase().includes(q);
+      if (!match) return false;
+    }
+    if (status === 'active') {
+      return row.status === 'active' && (!row.expires_at || row.expires_at > ts);
+    }
+    if (status === 'expired') {
+      return row.expires_at && row.expires_at <= ts;
+    }
+    if (status === 'inactive') {
+      return row.status === 'inactive';
+    }
+    return true;
+  });
 }
 
 function listUids({ search = '', status = '', page = 1, limit = 100 } = {}) {
+  const data = load();
+  const filtered = filterUids(data.uids, { search, status })
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
   const offset = (page - 1) * limit;
-  let where = 'WHERE 1=1';
-  const params = [];
-
-  if (search) {
-    where += ' AND (uid LIKE ? OR client_name LIKE ? OR notes LIKE ?)';
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-  }
-  if (status === 'active') {
-    where += " AND status = 'active' AND (expires_at IS NULL OR expires_at > datetime('now'))";
-  } else if (status === 'expired') {
-    where += " AND expires_at IS NOT NULL AND expires_at <= datetime('now')";
-  } else if (status === 'inactive') {
-    where += " AND status = 'inactive'";
-  }
-
-  const total = db.prepare(`SELECT COUNT(*) AS total FROM uids ${where}`).get(...params).total;
-  const rows = db.prepare(
-    `SELECT * FROM uids ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
-  ).all(...params, limit, offset);
-
-  return { rows, total, page, limit };
+  return {
+    rows: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+    page,
+    limit
+  };
 }
 
 function getUid(uid) {
-  return db.prepare('SELECT * FROM uids WHERE uid = ?').get(uid);
+  return load().uids.find((u) => u.uid === uid) || null;
 }
 
 function createAccount(uid, clientName = '', expiryDays = 14) {
-  const existing = getUid(uid);
-  if (existing) {
-    throw new Error('Account ID já existe');
-  }
-  const expiresAt = addDays(expiryDays);
-  db.prepare(`
-    INSERT INTO uids (uid, client_name, status, activated_at, expires_at)
-    VALUES (?, ?, 'active', datetime('now'), ?)
-  `).run(uid, clientName, expiresAt);
-  return getUid(uid);
+  if (getUid(uid)) throw new Error('Account ID já existe');
+  const data = load();
+  const row = {
+    id: data.nextId++,
+    uid,
+    client_name: clientName,
+    status: 'active',
+    notes: null,
+    activated_at: now(),
+    expires_at: addDays(expiryDays),
+    created_at: now(),
+    updated_at: now()
+  };
+  data.uids.push(row);
+  save(data);
+  return row;
 }
 
 function createUid(uid, clientName = '', expiresAt = null) {
-  const existing = getUid(uid);
-  if (existing) {
-    throw new Error('UID já existe');
-  }
-  db.prepare(
-    'INSERT INTO uids (uid, client_name, expires_at) VALUES (?, ?, ?)'
-  ).run(uid, clientName, expiresAt);
-  return getUid(uid);
+  if (getUid(uid)) throw new Error('UID já existe');
+  const data = load();
+  const row = {
+    id: data.nextId++,
+    uid,
+    client_name: clientName,
+    status: 'inactive',
+    notes: null,
+    activated_at: null,
+    expires_at: expiresAt,
+    created_at: now(),
+    updated_at: now()
+  };
+  data.uids.push(row);
+  save(data);
+  return row;
 }
 
 function activateUid(uid) {
-  const row = getUid(uid);
-  if (!row) {
-    throw new Error('UID não encontrado');
-  }
-  db.prepare(`
-    UPDATE uids
-    SET status = 'active', activated_at = datetime('now'), updated_at = datetime('now')
-    WHERE uid = ?
-  `).run(uid);
-  return getUid(uid);
+  const data = load();
+  const row = data.uids.find((u) => u.uid === uid);
+  if (!row) throw new Error('UID não encontrado');
+  row.status = 'active';
+  row.activated_at = now();
+  row.updated_at = now();
+  save(data);
+  return row;
 }
 
 function deactivateUid(uid) {
-  const row = getUid(uid);
-  if (!row) {
-    throw new Error('UID não encontrado');
-  }
-  db.prepare(`
-    UPDATE uids
-    SET status = 'inactive', updated_at = datetime('now')
-    WHERE uid = ?
-  `).run(uid);
-  return getUid(uid);
+  const data = load();
+  const row = data.uids.find((u) => u.uid === uid);
+  if (!row) throw new Error('UID não encontrado');
+  row.status = 'inactive';
+  row.updated_at = now();
+  save(data);
+  return row;
 }
 
 function deleteUid(uid) {
-  db.prepare('DELETE FROM uids WHERE uid = ?').run(uid);
+  const data = load();
+  data.uids = data.uids.filter((u) => u.uid !== uid);
+  save(data);
 }
 
 function deleteUids(uids) {
-  const del = db.prepare('DELETE FROM uids WHERE uid = ?');
-  const tx = db.transaction((items) => {
-    let deleted = 0;
-    for (const uid of items) {
-      deleted += del.run(uid).changes;
-    }
-    return deleted;
-  });
-  return tx(uids);
+  const data = load();
+  const set = new Set(uids.map(String));
+  const before = data.uids.length;
+  data.uids = data.uids.filter((u) => !set.has(u.uid));
+  save(data);
+  return before - data.uids.length;
 }
 
 function getStats() {
-  const total = db.prepare('SELECT COUNT(*) AS c FROM uids').get().c;
-  const active = db.prepare(`
-    SELECT COUNT(*) AS c FROM uids
-    WHERE status = 'active' AND (expires_at IS NULL OR expires_at > datetime('now'))
-  `).get().c;
-  const expired = db.prepare(`
-    SELECT COUNT(*) AS c FROM uids
-    WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')
-  `).get().c;
-  const keys = db.prepare('SELECT COUNT(*) AS c FROM api_keys WHERE active = 1').get().c;
+  const data = load();
+  const ts = now();
+  const total = data.uids.length;
+  const active = data.uids.filter((u) => u.status === 'active' && (!u.expires_at || u.expires_at > ts)).length;
+  const expired = data.uids.filter((u) => u.expires_at && u.expires_at <= ts).length;
+  const keys = data.api_keys.filter((k) => k.active === 1).length;
   return { total, active, expired, keys };
 }
 
