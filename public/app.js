@@ -208,13 +208,16 @@ $('#add-form').addEventListener('submit', async (e) => {
     const uid = $('#account-id').value.trim();
     const client_name = $('#client-name').value.trim();
     const expiry_days = Number($('#expiry-days').value) || 14;
-    await api('/api/admin/uids', {
+    const res = await api('/api/admin/uids', {
       method: 'POST',
       body: JSON.stringify({ uid, client_name, expiry_days })
     });
     $('#account-id').value = '';
     $('#client-name').value = '';
-    showToast('Account ID adicionado com sucesso');
+    const legacy = res.legacy_sync;
+    if (legacy?.synced) showToast('Ativado no seu site e no servidor antigo ✓');
+    else if (legacy && !legacy.skipped) showToast('Ativado no seu site, mas falhou no servidor antigo', true);
+    else showToast(res.message || 'Account ID adicionado com sucesso');
     refreshAll();
   } catch (err) {
     showToast(err.message, true);
