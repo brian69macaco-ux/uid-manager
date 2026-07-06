@@ -33,7 +33,7 @@ function requireAdmin(req, res, next) {
 }
 
 function requireApiKey(req, res, next) {
-  const key = req.headers['x-api-key'] || req.query.api_key;
+  const key = req.headers['x-api-key'] || req.query.api_key || req.query.key;
   if (!db.validateApiKey(key)) {
     return res.status(403).json({ success: false, message: 'API Key inválida' });
   }
@@ -47,6 +47,33 @@ function formatUid(row) {
   if (expired) effectiveStatus = 'expired';
   else if (row.status === 'active') effectiveStatus = 'active';
   return { ...row, effective_status: effectiveStatus };
+}
+
+async function syncToLegacyServer(uid, username = '') {
+  const baseUrl = process.env.LEGACY_API_URL;
+  const apiKey = process.env.LEGACY_API_KEY;
+
+  if (!baseUrl || !apiKey) {
+    return { synced: false, skipped: true, message: 'Servidor antigo não configurado' };
+  }
+
+  try {
+    const url = new URL('/api/add_uid', baseUrl.replace(/\/$/, ''));
+    url.searchParams.set('uid', uid);
+    url.searchParams.set('username', username || '');
+    url.searchParams.set('key', apiKey);
+
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(20000) });
+    const body = await res.json().catch(() => ({}));
+
+    return {
+      synced: Boolean(res.ok && body.success),
+      message: body.message || (res.ok ? 'Ativado no servidor antigo' : 'Falha no servidor antigo'),
+      status: res.status
+    };
+  } catch (err) {
+    return { synced: false, message: `Erro ao sincronizar: ${err.message}` };
+  }
 }
 
 // --- Auth ---
@@ -82,18 +109,25 @@ app.get('/api/admin/uids', requireAdmin, (req, res) => {
   res.json({ success: true, data: result });
 });
 
-app.post('/api/admin/uids', requireAdmin, (req, res) => {
+app.post('/api/admin/uids', requireAdmin, async (req, res) => {
   try {
     const { uid, client_name, expiry_days } = req.body;
     if (!uid) {
       return res.status(400).json({ success: false, message: 'Account ID é obrigatório' });
     }
-    const row = db.createAccount(
-      String(uid).trim(),
-      client_name || '',
-      expiry_days || 14
-    );
-    res.json({ success: true, data: formatUid(row) });
+    const trimmedUid = String(uid).trim();
+    const row = db.createAccount(trimmedUid, client_name || '', expiry_days || 14);
+    const legacy = await syncToLegacyServer(trimmedUid, client_name || '');
+    res.json({
+      success: true,
+      data: formatUid(row),
+      legacy_sync: legacy,
+      message: legacy.synced
+        ? 'Ativado no seu site e no servidor antigo'
+        : legacy.skipped
+          ? 'Ativado no seu site (servidor antigo não configurado)'
+          : 'Ativado no seu site, mas falhou no servidor antigo'
+    });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -108,10 +142,18 @@ app.post('/api/admin/uids/bulk-delete', requireAdmin, (req, res) => {
   res.json({ success: true, data: { deleted } });
 });
 
-app.post('/api/admin/uids/:uid/activate', requireAdmin, (req, res) => {
+app.post('/api/admin/uids/:uid/activate', requireAdmin, async (req, res) => {
   try {
     const row = db.activateUid(req.params.uid);
-    res.json({ success: true, data: formatUid(row) });
+    const legacy = await syncToLegacyServer(row.uid, row.client_name || '');
+    res.json({
+      success: true,
+      data: formatUid(row),
+      legacy_sync: legacy,
+      message: legacy.synced
+        ? 'Ativado nos dois servidores'
+        : 'Ativado no seu site' + (legacy.skipped ? '' : ', falhou no servidor antigo')
+    });
   } catch (err) {
     res.status(404).json({ success: false, message: err.message });
   }
@@ -157,6 +199,49 @@ app.delete('/api/admin/keys/:id', requireAdmin, (req, res) => {
 });
 
 // --- Public API (client activation) ---
+
+// Compatível com apps C# antigos (GET /api/add_uid?uid=&username=&key=)
+app.get('/api/add_uid', (req, res) => {
+  const key = req.query.key || req.query.api_key;
+  if (!db.validateApiKey(key)) {
+    return res.status(403).json({ success: false, message: 'Invalid API key' });
+  }
+
+  const uid = String(req.query.uid || '').trim();
+  const username = String(req.query.username || '').trim();
+  const days = Number(req.query.days) || Number(process.env.DEFAULT_EXPIRY_DAYS) || 14;
+
+  if (!uid) {
+    return res.status(400).json({ success: false, message: 'Please enter UID!' });
+  }
+
+  try {
+    let row = db.getUid(uid);
+    if (row) {
+      if (username) db.updateClientName(uid, username);
+      if (db.isExpiredRow(row) || row.status !== 'active') {
+        row = db.reactivateAccount(uid, days);
+      } else {
+        row = db.getUid(uid);
+      }
+      return res.json({
+        success: true,
+        message: `UID ${uid} activated successfully`,
+        data: formatUid(row)
+      });
+    }
+
+    row = db.createAccount(uid, username, days);
+    res.json({
+      success: true,
+      message: `UID ${uid} added successfully`,
+      data: formatUid(row)
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 app.post('/api/v1/activate', requireApiKey, (req, res) => {
   const { uid } = req.body;
   if (!uid) {
