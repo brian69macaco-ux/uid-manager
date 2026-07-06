@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UID Manager - Admin Panel</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login-screen" class="screen">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="shield-icon">🛡</div>
+        <div>
+          <div class="logo">UID Manager</div>
+          <div class="logo-sub">ADMIN PANEL</div>
+        </div>
+      </div>
+      <form id="login-form">
+        <input type="password" id="password" placeholder="Senha de administrador" required>
+        <button type="submit" class="btn-primary full">Entrar</button>
+      </form>
+      <p id="login-error" class="error hidden"></p>
+    </div>
+  </div>
+
+  <div id="app" class="layout hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="shield-icon">🛡</div>
+        <div>
+          <strong>UID Manager</strong>
+          <span>ADMIN PANEL</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-page="dashboard">
+          <span class="nav-icon">▦</span> Dashboard
+        </button>
+        <button class="nav-item" data-page="settings">
+          <span class="nav-icon">⚙</span> Settings
+        </button>
+        <button class="nav-item" data-page="updates">
+          <span class="nav-icon">↻</span> Updates <span class="dot"></span>
+        </button>
+        <button class="nav-item" data-page="exe-add">
+          <span class="nav-icon">+</span> Exe Uid Add
+        </button>
+        <button class="nav-item" data-page="update-exe">
+          <span class="nav-icon">⬆</span> Update EXE
+        </button>
+        <button class="nav-item" data-page="free-access">
+          <span class="nav-icon">★</span> Free Access
+        </button>
+        <button class="nav-item" data-page="send-request">
+          <span class="nav-icon">✉</span> Send Request
+        </button>
+      </nav>
+
+      <div class="sidebar-user">
+        <div class="avatar">DK</div>
+        <div>
+          <strong>DKZSTO...</strong>
+          <span class="user-badge">NORMAL</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- Dashboard -->
+      <section id="page-dashboard" class="page active">
+        <header class="page-header">
+          <div>
+            <h1>Dashboard</h1>
+            <p>Monitor and manage all registered UIDs</p>
+          </div>
+        </header>
+
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-top"><span class="stat-icon">👥</span> Total UIDs</div>
+            <div class="stat-number" id="stat-total">0</div>
+            <div class="stat-desc">Registered in system</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-top"><span class="stat-icon green">✓</span> Active</div>
+            <div class="stat-number green" id="stat-active">0</div>
+            <div class="stat-desc">Currently valid</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-top"><span class="stat-icon red">⏱</span> Expired</div>
+            <div class="stat-number red" id="stat-expired">0</div>
+            <div class="stat-desc">Need renewal</div>
+          </div>
+        </div>
+
+        <div class="content-grid">
+          <div class="card add-card">
+            <h2>Add New Account ID</h2>
+            <form id="add-form">
+              <label>Account ID</label>
+              <input type="text" id="account-id" placeholder="Enter Account ID..." required>
+
+              <label>Client Name</label>
+              <input type="text" id="client-name" placeholder="Enter Client Name...">
+
+              <label>Expiry (days)</label>
+              <input type="number" id="expiry-days" value="14" min="1" max="365">
+
+              <div class="expiry-preview">
+                <div class="expiry-days-big" id="preview-days">14 days</div>
+                <div class="expiry-date" id="preview-date">Expires on —</div>
+              </div>
+
+              <button type="submit" class="btn-primary full">Add Account ID →</button>
+            </form>
+          </div>
+
+          <div class="card table-card">
+            <div class="table-header">
+              <h2>Registered Account IDs</h2>
+              <div class="table-tools">
+                <div class="search-box">
+                  <span>🔍</span>
+                  <input type="search" id="search-input" placeholder="Search...">
+                </div>
+                <button class="tool-btn" id="select-all-btn">Select All</button>
+                <button class="tool-btn" id="expand-btn">Expand</button>
+                <button class="tool-btn danger" id="clear-btn">Clear</button>
+              </div>
+            </div>
+
+            <div class="table-wrap" id="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="col-check"></th>
+                    <th>ACCOUNT ID</th>
+                    <th>STATUS</th>
+                    <th>EXPIRES</th>
+                    <th>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody id="uids-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="page-settings" class="page">
+        <header class="page-header">
+          <div>
+            <h1>Settings</h1>
+            <p>Manage API Keys and system configuration</p>
+          </div>
+        </header>
+
+        <div class="card">
+          <div class="table-header">
+            <h2>API Keys</h2>
+            <button id="add-key-btn" class="btn-primary">+ Nova API Key</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Prefixo</th>
+                  <th>Status</th>
+                  <th>Criada em</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="keys-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card docs-card">
+          <h2>API Documentation</h2>
+          <p>Use the API Key in the <code>X-API-Key</code> header to activate clients.</p>
+          <pre><code>POST /api/v1/activate
+Headers: X-API-Key: sua_chave
+Body: { "uid": "123456789" }
+
+GET /api/v1/check/123456789
+Headers: X-API-Key: sua_chave</code></pre>
+        </div>
+      </section>
+
+      <!-- Placeholder pages -->
+      <section id="page-updates" class="page">
+        <header class="page-header"><h1>Updates</h1><p>Manage system updates</p></header>
+        <div class="card placeholder-card"><p>Em breve — configure atualizações do sistema aqui.</p></div>
+      </section>
+      <section id="page-exe-add" class="page">
+        <header class="page-header"><h1>Exe Uid Add</h1><p>Add UIDs via executable</p></header>
+        <div class="card placeholder-card"><p>Em breve — integração com executável.</p></div>
+      </section>
+      <section id="page-update-exe" class="page">
+        <header class="page-header"><h1>Update EXE</h1><p>Update client executable</p></header>
+        <div class="card placeholder-card"><p>Em breve — upload de nova versão do EXE.</p></div>
+      </section>
+      <section id="page-free-access" class="page">
+        <header class="page-header"><h1>Free Access</h1><p>Manage free access accounts</p></header>
+        <div class="card placeholder-card"><p>Em breve — gerenciar acesso gratuito.</p></div>
+      </section>
+      <section id="page-send-request" class="page">
+        <header class="page-header"><h1>Send Request</h1><p>Send requests to clients</p></header>
+        <div class="card placeholder-card"><p>Em breve — enviar solicitações.</p></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="tool-btn">Cancelar</button>
+        <button id="modal-confirm" class="btn-primary">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
